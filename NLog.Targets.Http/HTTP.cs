@@ -50,7 +50,7 @@ namespace NLog.Targets.Http
         private Layout _proxyUser = string.Empty;
         private Layout _url = Layout.FromString(string.Empty);
         private string _contentType = "application/json";
-        private MediaTypeHeaderValue _contentTypeHeader;
+        private MediaTypeHeaderValue _contentTypeHeader = new MediaTypeHeaderValue("application/json") { CharSet = Encoding.UTF8.WebName };
 
         /// <summary>
         ///     URL to Post to
@@ -119,9 +119,8 @@ namespace NLog.Targets.Http
             get => _contentType;
             set
             {
-                _contentType = value;
-                _contentTypeHeader = new MediaTypeHeaderValue(string.IsNullOrWhiteSpace(value) ? "text/plain" : value)
-                    { CharSet = Encoding.UTF8.WebName };
+                _contentType = string.IsNullOrWhiteSpace(value) ? "application/json" : value;
+                _contentTypeHeader = new MediaTypeHeaderValue(_contentType) { CharSet = Encoding.UTF8.WebName };
             }
         }
 
