@@ -22,9 +22,6 @@ namespace NLog.Targets.Http
     // ReSharper disable once InconsistentNaming
     public class HTTP : TargetWithLayout
     {
-        private static readonly Dictionary<string, HttpMethod> AvailableHttpMethods = new Dictionary<string, HttpMethod>
-            { { "post", HttpMethod.Post }, { "get", HttpMethod.Get } };
-
         private static readonly byte[] JsonArrayStart = Encoding.UTF8.GetBytes("[");
         private static readonly byte[] JsonArrayEnd = Encoding.UTF8.GetBytes("]");
         private static readonly byte[] JsonArrayDelimit = Encoding.UTF8.GetBytes(", ");
@@ -67,7 +64,20 @@ namespace NLog.Targets.Http
             }
         }
 
-        public string Method { get; set; } = "POST";
+        public string Method
+        {
+            get => _method.ToString();
+            set
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    _method = HttpMethodVerb.POST;
+                else if (Enum.TryParse<HttpMethodVerb>(value.Trim().ToUpper(), out var method))
+                    _method = method;
+                else
+                    _method = HttpMethodVerb.POST;
+            }
+        }
+        private HttpMethodVerb _method = HttpMethodVerb.POST;
 
         public Layout Authorization
         {
@@ -204,13 +214,16 @@ namespace NLog.Targets.Http
 
         public HTTP()
         {
-            OptimizeBufferReuse = true;
+            OptimizeBufferReuse = true; // Optimize RenderLogEvent()
         }
 
         private async Task ProcessChunk(ArraySegment<byte> bytes, List<byte[]> stack)
         {
             if (!await SendFast(bytes).ConfigureAwait(false))
-                stack.ForEach(s => _taskQueue.Enqueue(s));
+            {
+                foreach (var item in stack)
+                    _taskQueue.Enqueue(item);
+            }
         }
 
         protected override void InitializeTarget()
@@ -255,28 +268,24 @@ namespace NLog.Targets.Http
 
         private ArraySegment<byte> BuildChunk(List<byte[]> stack, CancellationToken flushToken)
         {
-            if (!_taskQueue.TryPeek(out var peek))
-            {
-                throw new InvalidOperationException("Peek unsuccessful");
-            }
+            _taskQueue.TryPeek(out var peek);
 
-            using (var memoryStream = new MemoryStream((int)(BatchSize * peek.Length * 1.1)))
+            using (var memoryStream = new MemoryStream((int)(BatchSize * (peek?.Length ?? 0) * 1.1)))
             {
                 var counter = 0;
                 if (BatchAsJsonArray)
                     memoryStream.Append(JsonArrayStart);
-                while (!_taskQueue.IsEmpty)
+
+                while (_taskQueue.TryDequeue(out var message))
                 {
-                    if (_taskQueue.TryDequeue(out var message))
-                    {
-                        ++counter;
-                        memoryStream.Append(InMemoryCompression ? Utility.UnzipAsBytes(message) : message);
-                        stack.Add(message);
-                    }
+                    if (counter > 0)
+                        memoryStream.Append(BatchAsJsonArray ? JsonArrayDelimit : JsonNewline);
+
+                    ++counter;
+                    memoryStream.Append(InMemoryCompression ? Utility.UnzipAsBytes(message) : message);
+                    stack.Add(message);
 
                     if (counter == BatchSize && !flushToken.IsCancellationRequested) break;
-                    if (!_taskQueue.IsEmpty)
-                        memoryStream.Append(BatchAsJsonArray ? JsonArrayDelimit : JsonNewline);
                 }
 
                 if (BatchAsJsonArray)
@@ -296,8 +305,7 @@ namespace NLog.Targets.Http
         protected override void FlushAsync(AsyncContinuation asyncContinuation)
         {
             InternalLogger.Info($"Flushing {_taskQueue.Count} events");
-            AwaitCurrentMessagesToProcess().Wait();
-            base.FlushAsync(asyncContinuation);
+            AwaitCurrentMessagesToProcess().ContinueWith(task => asyncContinuation(task.Exception));
         }
 
         private async Task AwaitCurrentMessagesToProcess()
@@ -311,16 +319,18 @@ namespace NLog.Targets.Http
 
         protected override void Write(LogEventInfo logEvent)
         {
+            var payload = RenderLogEvent(Layout, logEvent);
             // NLogs Write is synchronous
-            SafeEnqueue(logEvent).Wait();
+            SafeEnqueue(payload).Wait();
         }
 
-        private async Task SafeEnqueue(LogEventInfo logEvent)
+        private async Task SafeEnqueue(string payload)
         {
-            while (_taskQueue.Count >= MaxQueueSize) await AwaitCurrentMessagesToProcess();
+            while (_taskQueue.Count >= MaxQueueSize) await AwaitCurrentMessagesToProcess().ConfigureAwait(false);
+
             _taskQueue.Enqueue(InMemoryCompression
-                    ? Utility.Zip(Layout.Render(logEvent))
-                    : Encoding.UTF8.GetBytes(Layout.Render(logEvent)));
+                    ? Utility.Zip(payload)
+                    : Encoding.UTF8.GetBytes(payload));
         }
 
         /// <summary>
@@ -390,12 +400,18 @@ namespace NLog.Targets.Http
 
         private HttpMethod GetHttpMethodsToUseOrDefault()
         {
-            return AvailableHttpMethods[Method.ToLower()] ?? HttpMethod.Post;
+            switch (_method)
+            {
+                case HttpMethodVerb.GET: return HttpMethod.Get;
+                case HttpMethodVerb.POST:
+                default:
+                    return HttpMethod.Post;
+            }
         }
 
-        private AuthenticationHeaderValue GetAuthorizationHeader()
+        private static AuthenticationHeaderValue GetAuthorizationHeader(string authorization)
         {
-            var parts = Authorization?.Render(LogEventInfo.CreateNullEvent()).Split(' ') ?? new[] { string.Empty };
+            var parts = authorization.Split(' ');
             return parts.Length == 1
                 ? new AuthenticationHeaderValue(parts[0])
                 : new AuthenticationHeaderValue(parts[0], string.Join(" ", parts.Skip(1)));
@@ -414,9 +430,9 @@ namespace NLog.Targets.Http
                 _httpClient?.Dispose();
                 // ReSharper disable once UseObjectOrCollectionInitializer
 #if NETCOREAPP
-                    var handler = new SocketsHttpHandler();
+                var handler = new SocketsHttpHandler();
 #elif NETSTANDARD
-                    var handler = new HttpClientHandler();
+                var handler = new HttpClientHandler();
 #else
                 var handler = new WebRequestHandler();
 #endif
@@ -471,8 +487,9 @@ namespace NLog.Targets.Http
                     }
                 }
 
-                if (!string.IsNullOrWhiteSpace(Authorization?.Render(nullEvent)))
-                    _httpClient.DefaultRequestHeaders.Authorization = GetAuthorizationHeader();
+                var authorization = Authorization?.Render(nullEvent);
+                if (!string.IsNullOrWhiteSpace(authorization))
+                    _httpClient.DefaultRequestHeaders.Authorization = GetAuthorizationHeader(authorization);
 
                 if (IgnoreSslErrors)
                 {
