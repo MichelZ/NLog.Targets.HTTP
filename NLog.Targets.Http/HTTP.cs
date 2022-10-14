@@ -240,7 +240,7 @@ namespace NLog.Targets.Http
             {
                 if (_taskQueue.IsEmpty)
                 {
-                    await Task.Delay(1, CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(100, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -353,7 +353,6 @@ namespace NLog.Targets.Http
                     Content = new ByteArrayContent(message.Array, message.Offset, message.Count)
                 };
                 request.Content.Headers.ContentType = _contentTypeHeader;
-
                 var httpResponseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
 #if NETFRAMEWORK || NETSTANDARD
                 if ((int)httpResponseMessage.StatusCode == 429)
