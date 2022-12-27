@@ -244,6 +244,8 @@ namespace NLog.Targets.Http
                     continue;
                 }
 
+                InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
+
                 if (_hasHttpError)
                     try
                     {
@@ -314,7 +316,7 @@ namespace NLog.Targets.Http
             // or no flags available 
             // just wait
             while (!_taskQueue.IsEmpty || _conversationActiveFlag.CurrentCount == 0)
-                await Task.Delay(1, CancellationToken.None).ConfigureAwait(false);
+                await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
         }
 
         protected override void Write(LogEventInfo logEvent)
@@ -359,10 +361,18 @@ namespace NLog.Targets.Http
 #else
                 if (httpResponseMessage.StatusCode == HttpStatusCode.TooManyRequests)
 #endif
+                {
                     // Respect 429.
+                    InternalLogger.Warn("Too many requests. Pausing for a moment.");
                     await Task.Delay(7500).ConfigureAwait(false);
+                }
 
                 _hasHttpError = !httpResponseMessage.IsSuccessStatusCode;
+                if (_hasHttpError)
+                {
+                    InternalLogger.Warn($"There was a HTTP error: {httpResponseMessage.StatusCode}");
+                }
+
                 return !_hasHttpError;
             }
             catch (WebException)
