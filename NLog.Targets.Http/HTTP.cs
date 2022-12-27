@@ -236,6 +236,7 @@ namespace NLog.Targets.Http
         private async Task Start(CancellationToken cancellationToken)
         {
             var stack = new List<byte[]>();
+            var lastQueueLengthLog = DateTime.UtcNow;
             while (!cancellationToken.IsCancellationRequested)
             {
                 if (_taskQueue.IsEmpty)
@@ -244,7 +245,11 @@ namespace NLog.Targets.Http
                     continue;
                 }
 
-                InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
+                if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-5))
+                {
+                    InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
+                    lastQueueLengthLog = DateTime.UtcNow;
+                }
 
                 if (_hasHttpError)
                     try
