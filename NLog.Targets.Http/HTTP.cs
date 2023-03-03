@@ -284,7 +284,7 @@ namespace NLog.Targets.Http
         {
             _taskQueue.TryPeek(out var peek);
 
-            using (var memoryStream = new MemoryStream((int)(BatchSize * (peek?.Length ?? 0) * 1.1)))
+            using (var memoryStream = new MemoryStream((int)(BatchSize * (peek?.Length ?? 1) * 1.1)))
             {
                 var counter = 0;
                 if (BatchAsJsonArray)
