@@ -235,41 +235,48 @@ namespace NLog.Targets.Http
 
         private async Task Start(CancellationToken cancellationToken)
         {
-            var stack = new List<byte[]>();
-            var lastQueueLengthLog = DateTime.UtcNow;
-            while (!cancellationToken.IsCancellationRequested)
+            try
             {
-                if (_taskQueue.IsEmpty)
+                var stack = new List<byte[]>();
+                var lastQueueLengthLog = DateTime.UtcNow;
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    await Task.Delay(100, cancellationToken).ConfigureAwait(false);
-                    continue;
+                    if (_taskQueue.IsEmpty)
+                    {
+                        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-5))
+                    {
+                        InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
+                        lastQueueLengthLog = DateTime.UtcNow;
+                    }
+
+                    if (_hasHttpError)
+                        try
+                        {
+                            await _conversationActiveFlag.WaitAsync(_terminateProcessor.Token);
+                            await Task.Delay(HttpErrorRetryTimeout, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (Exception exception)
+                        {
+                            InternalLogger.Info($"HTTP Logger: {exception.Message}");
+                        }
+                        finally
+                        {
+                            _hasHttpError = false;
+                            _conversationActiveFlag.Release();
+                        }
+
+                    stack.Clear();
+                    var builder = BuildChunk(stack, cancellationToken);
+                    await ProcessChunk(builder, stack).ConfigureAwait(false);
                 }
-
-                if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-5))
-                {
-                    InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
-                    lastQueueLengthLog = DateTime.UtcNow;
-                }
-
-                if (_hasHttpError)
-                    try
-                    {
-                        await _conversationActiveFlag.WaitAsync(_terminateProcessor.Token);
-                        await Task.Delay(HttpErrorRetryTimeout, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (Exception exception)
-                    {
-                        InternalLogger.Info($"HTTP Logger: {exception.Message}");
-                    }
-                    finally
-                    {
-                        _hasHttpError = false;
-                        _conversationActiveFlag.Release();
-                    }
-
-                stack.Clear();
-                var builder = BuildChunk(stack, cancellationToken);
-                await ProcessChunk(builder, stack).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                InternalLogger.Error(exception, "Error in HTTP Logger.");
             }
         }
 
