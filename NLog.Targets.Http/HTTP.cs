@@ -284,7 +284,12 @@ namespace NLog.Targets.Http
         {
             _taskQueue.TryPeek(out var peek);
 
-            using (var memoryStream = new MemoryStream((int)(BatchSize * (peek?.Length ?? 1) * 1.1)))
+            if (peek?.Length < 0)
+            {
+                throw new Exception("Cannot be < 0");
+            }
+
+            using (var memoryStream = new MemoryStream((int)(BatchSize * (peek?.Length ?? 0) * 1.1)))
             {
                 var counter = 0;
                 if (BatchAsJsonArray)
