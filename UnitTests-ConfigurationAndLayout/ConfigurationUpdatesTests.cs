@@ -26,7 +26,7 @@ namespace UnitTests_ConfigurationAndLayout
         [Test]
         public void HeadersAreNotEmpty()
         {
-            Assert.True(LogManager.Configuration.AllTargets.Count > 0);
+            Assert.That(LogManager.Configuration.AllTargets.Count > 0);
             var splunkTarget = (HTTP)LogManager.Configuration.FindTargetByName("splunk");
             Assert.That(splunkTarget.Headers.Count == 2);
         }

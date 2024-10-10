@@ -10,8 +10,8 @@ namespace UnitTests_Core
         public void Test429()
         {
             var httpResponseMessage = new HttpResponseMessage { StatusCode = HttpStatusCode.TooManyRequests };
-            Assert.True(httpResponseMessage.StatusCode == HttpStatusCode.TooManyRequests);
-            Assert.True((int)httpResponseMessage.StatusCode == 429);
+            Assert.That(httpResponseMessage.StatusCode == HttpStatusCode.TooManyRequests);
+            Assert.That((int)httpResponseMessage.StatusCode == 429);
         }
     }
 }

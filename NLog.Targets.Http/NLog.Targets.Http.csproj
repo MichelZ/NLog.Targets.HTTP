@@ -2,7 +2,7 @@
 
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net472;net48;netstandard2.1;netstandard2.0;netcoreapp3.1;net5.0;net6.0</TargetFrameworks>
+    <TargetFrameworks>net472;net48;netstandard2.1;netstandard2.0;net6.0;net8.0</TargetFrameworks>
     <Title>NLog.Targets.Http</Title>
     <Description>An NLog target for Http log entries submission (works wih Splunk HEC)</Description>
     <Authors>Luca Giordano, Dariusz Danielewski, Stan Smith and Julian Verdurmen</Authors>
@@ -13,7 +13,7 @@
     <PackageLicenseUrl></PackageLicenseUrl>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>git://github.com/DarekDan/NLog.Targets.HTTP</RepositoryUrl>
-    <Version>1.0.21-alpha9</Version>
+    <Version>1.0.21-alpha10</Version>
     <PackageIcon>nlog-http.png</PackageIcon>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageReleaseNotes>
@@ -102,8 +102,11 @@
 
   <!--common NuGet package refs -->
   <ItemGroup>
-    <PackageReference Include="NLog" Version="5.1.0" />
-    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+    <PackageReference Include="NLog" Version="5.3.4" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">
+	  <PackageReference Include="System.Net.Http" Version="4.3.4" />    
   </ItemGroup>
 
   <!--.NET Standard 2.0 config -->
@@ -116,16 +119,6 @@
     <AssemblyTitle>NLog.Targets.Http .NET Standard 2.1</AssemblyTitle>
   </PropertyGroup>
 
-  <!-- .NET 4.5 config -->
-  <PropertyGroup Condition=" '$(TargetFramework)'=='net45' ">
-    <AssemblyTitle>NLog.Targets.Http .NET 4.5</AssemblyTitle>
-  </PropertyGroup>
-
-  <!-- .NET 4.6.2 config -->
-  <PropertyGroup Condition=" '$(TargetFramework)'=='net462' ">
-    <AssemblyTitle>NLog.Targets.Http .NET 4.6.2</AssemblyTitle>
-  </PropertyGroup>
-
   <!-- .NET 4.7.2 config -->
   <PropertyGroup Condition=" '$(TargetFramework)'=='net472' ">
     <AssemblyTitle>NLog.Targets.Http .NET 4.7.2</AssemblyTitle>
@@ -134,6 +127,11 @@
   <!-- .NET 4.8 config -->
   <PropertyGroup Condition=" '$(TargetFramework)'=='net48' ">
     <AssemblyTitle>NLog.Targets.Http .NET 4.8</AssemblyTitle>
+  </PropertyGroup>
+
+  <!-- .NET 8.0 config -->
+  <PropertyGroup Condition=" '$(TargetFramework)'=='net8.0' ">
+	  <AssemblyTitle>NLog.Targets.Http .NET 8.0</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup Condition="$(TargetFramework.StartsWith('net4'))">
