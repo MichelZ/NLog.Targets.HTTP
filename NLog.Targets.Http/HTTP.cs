@@ -106,7 +106,7 @@ namespace NLog.Targets.Http
         /// <summary>
         ///     The timeout between attempted HTTP requests.
         /// </summary>
-        public int HttpErrorRetryTimeout { get; set; } = 500;
+        public int HttpErrorRetryTimeout { get; set; } = 50;
 
         public bool KeepAlive { get; set; }
 
@@ -214,7 +214,6 @@ namespace NLog.Targets.Http
 
         public HTTP()
         {
-            OptimizeBufferReuse = true; // Optimize RenderLogEvent()
         }
 
         private async Task ProcessChunk(ArraySegment<byte> bytes, List<byte[]> stack)
@@ -239,15 +238,16 @@ namespace NLog.Targets.Http
             {
                 var stack = new List<byte[]>();
                 var lastQueueLengthLog = DateTime.UtcNow;
+                
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     if (_taskQueue.IsEmpty)
                     {
-                        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
                         continue;
                     }
 
-                    if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-5))
+                    if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-1))
                     {
                         InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
                         lastQueueLengthLog = DateTime.UtcNow;
@@ -284,10 +284,12 @@ namespace NLog.Targets.Http
         {
             _taskQueue.TryPeek(out var peek);
 
-            int memoryStreamSize = (int)(BatchSize * (peek?.Length ?? 0) * 1.1);
+            var peekedLength = peek?.Length ?? 100;
+
+            int memoryStreamSize = (int)(BatchSize * peekedLength * 1.1);
             if (memoryStreamSize <= 0)
             {
-                memoryStreamSize = (int)(peek.Length * 1.1);
+                memoryStreamSize = (int)(peekedLength * 1.1);
             }
 
             using (var memoryStream = new MemoryStream(memoryStreamSize))
@@ -334,7 +336,7 @@ namespace NLog.Targets.Http
             // or no flags available 
             // just wait
             while (!_taskQueue.IsEmpty || _conversationActiveFlag.CurrentCount == 0)
-                await Task.Delay(100, CancellationToken.None).ConfigureAwait(false);
+                await Task.Delay(50, CancellationToken.None).ConfigureAwait(false);
         }
 
         protected override void Write(LogEventInfo logEvent)
@@ -457,7 +459,9 @@ namespace NLog.Targets.Http
                 _httpClient?.Dispose();
                 // ReSharper disable once UseObjectOrCollectionInitializer
 #if NETCOREAPP
-                var handler = new SocketsHttpHandler();
+                var handler = new SocketsHttpHandler() {
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(2)
+                };
 #elif NETSTANDARD
                 var handler = new HttpClientHandler();
 #else
