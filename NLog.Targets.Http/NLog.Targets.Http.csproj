@@ -13,7 +13,7 @@
     <PackageLicenseUrl></PackageLicenseUrl>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>git://github.com/DarekDan/NLog.Targets.HTTP</RepositoryUrl>
-    <Version>1.0.21.1-alpha</Version>
+    <Version>1.0.21.2-alpha</Version>
     <PackageIcon>nlog-http.png</PackageIcon>
     <PackageReadmeFile>readme.md</PackageReadmeFile>
     <PackageReleaseNotes>
@@ -102,7 +102,7 @@
 
   <!--common NuGet package refs -->
   <ItemGroup>
-    <PackageReference Include="NLog" Version="5.4.0" />
+    <PackageReference Include="NLog" Version="5.5.1" />
   </ItemGroup>
 
   <ItemGroup Condition="!$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">
