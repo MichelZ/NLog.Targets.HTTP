@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.IO;
 using NLog.Common;
 using NLog.Config;
 using NLog.Layouts;
@@ -20,39 +21,43 @@ namespace NLog.Targets.Http
 {
     [Target("HTTP")]
     // ReSharper disable once InconsistentNaming
-    public class HTTP : TargetWithLayout
+    public class HTTP : AsyncTaskTarget
     {
+        private static readonly Encoding Utf8Encoding = new UTF8Encoding(false); // No PreAmble BOM
         private static readonly byte[] JsonArrayStart = Encoding.UTF8.GetBytes("[");
         private static readonly byte[] JsonArrayEnd = Encoding.UTF8.GetBytes("]");
-        private static readonly byte[] JsonArrayDelimit = Encoding.UTF8.GetBytes(", ");
-        private static readonly byte[] JsonNewline = Encoding.UTF8.GetBytes(Environment.NewLine);
 
-        private readonly SemaphoreSlim _conversationActiveFlag = new SemaphoreSlim(1, 1);
+        private static readonly RecyclableMemoryStreamManager MemoryStreamManager =
+            new RecyclableMemoryStreamManager(
+                new RecyclableMemoryStreamManager.Options
+                {
+                    BlockSize = 4096,
+                    LargeBufferMultiple = 1024 * 1024,
+                    MaximumBufferSize = 16 * 1024 * 1024,
+                    MaximumSmallPoolFreeBytes = 4 * 1024 * 1024,
+                    MaximumLargePoolFreeBytes = 64 * 1024 * 1024,
+                    AggressiveBufferReturn = true
+                });
+
         private readonly ConcurrentStack<string> _propertiesChanged = new ConcurrentStack<string>();
-        private readonly ConcurrentQueue<byte[]> _taskQueue = new ConcurrentQueue<byte[]>();
-        private readonly CancellationTokenSource _terminateProcessor = new CancellationTokenSource();
         private string _accept = "application/json";
-        private Layout _authorization;
+        private Layout? _authorization;
 
-        private int _batchSize = 1;
         private int _connectTimeout = 30000;
-        private bool _expect100Continue = ServicePointManager.Expect100Continue;
-        private HttpClient _httpClient;
+        private bool _expect100Continue = true;
+        private HttpClient? _httpClient;
         private bool _ignoreSslErrors = true;
-        private bool _hasHttpError;
 
-        private int _maxQueueSize = int.MaxValue;
         private Layout _proxyPassword = string.Empty;
-        private Layout _proxyUrl = Layout.FromString(string.Empty);
+        private Layout _proxyUrl = string.Empty;
         private Layout _proxyUser = string.Empty;
-        private Layout _url = Layout.FromString(string.Empty);
+        private Layout _url = string.Empty;
         private string _contentType = "application/json";
-        private MediaTypeHeaderValue _contentTypeHeader = new MediaTypeHeaderValue("application/json") { CharSet = Encoding.UTF8.WebName };
+        private MediaTypeHeaderValue _contentTypeHeader = new MediaTypeHeaderValue("application/json") { CharSet = Utf8Encoding.WebName };
 
         /// <summary>
         ///     URL to Post to
         /// </summary>
-        [RequiredParameter]
         public Layout Url
         {
             get => _url;
@@ -79,7 +84,7 @@ namespace NLog.Targets.Http
         }
         private HttpMethodVerb _method = HttpMethodVerb.POST;
 
-        public Layout Authorization
+        public Layout? Authorization
         {
             get => _authorization;
             set
@@ -101,27 +106,35 @@ namespace NLog.Targets.Http
             }
         }
 
-        public bool FlushBeforeShutdown { get; set; } = true;
-
         /// <summary>
         ///     The timeout between attempted HTTP requests.
         /// </summary>
-        public int HttpErrorRetryTimeout { get; set; } = 50;
+        public int HttpErrorRetryTimeout
+        {
+            get => RetryDelayMilliseconds;
+            set => RetryDelayMilliseconds = value;
+        }
 
         public bool KeepAlive { get; set; }
 
-        public int BatchSize
-        {
-            get => _batchSize;
-            set => _batchSize = value < 1 ? 1 : value;
-        }
-
-        public bool BatchAsJsonArray { get; set; } = false;
+        public bool BatchAsJsonArray { get; set; }
 
         public int MaxQueueSize
         {
-            get => _maxQueueSize;
-            set => _maxQueueSize = value < 1 ? int.MaxValue : value;
+            get => OverflowAction == Wrappers.AsyncTargetWrapperOverflowAction.Grow ? int.MaxValue : QueueLimit;
+            set
+            {
+                if (value < 1 || value == int.MaxValue)
+                {
+                    OverflowAction = Wrappers.AsyncTargetWrapperOverflowAction.Grow;    // No limit
+                    QueueLimit = 10000;
+                }
+                else
+                {
+                    OverflowAction = Wrappers.AsyncTargetWrapperOverflowAction.Block;   // Block on limit
+                    QueueLimit = value;
+                }
+            }
         }
 
         public string ContentType
@@ -129,8 +142,14 @@ namespace NLog.Targets.Http
             get => _contentType;
             set
             {
+                if (value == _contentType)
+                {
+                    return;
+                }
+
                 _contentType = string.IsNullOrWhiteSpace(value) ? "application/json" : value;
-                _contentTypeHeader = new MediaTypeHeaderValue(_contentType) { CharSet = Encoding.UTF8.WebName };
+                _contentTypeHeader = new MediaTypeHeaderValue(_contentType) { CharSet = Utf8Encoding.WebName };
+                NotifyPropertyChanged(nameof(ContentType));
             }
         }
 
@@ -147,9 +166,6 @@ namespace NLog.Targets.Http
 
         [ArrayParameter(typeof(NHttpHeader), "header")]
         public IList<NHttpHeader> Headers { get; set; } = new List<NHttpHeader>();
-
-        // ReSharper disable once UnusedMember.Global
-        [Obsolete] public int DefaultConnectionLimit { get; set; } = ServicePointManager.DefaultConnectionLimit;
 
         public bool Expect100Continue
         {
@@ -172,8 +188,6 @@ namespace NLog.Targets.Http
                 NotifyPropertyChanged(nameof(ConnectTimeout));
             }
         }
-
-        public bool InMemoryCompression { get; set; } = false;
 
         public Layout ProxyUrl
         {
@@ -208,222 +222,163 @@ namespace NLog.Targets.Http
             }
         }
 
-        // ReSharper disable once UnusedMember.Global
-        // ReSharper disable once IdentifierTypo
-        [Obsolete] public bool UseNagleAlgorithm { get; set; } = true;
-
         public HTTP()
         {
-        }
-
-        private async Task ProcessChunk(ArraySegment<byte> bytes, List<byte[]> stack)
-        {
-            if (!await SendFast(bytes).ConfigureAwait(false))
-            {
-                foreach (var item in stack)
-                    _taskQueue.Enqueue(item);
-            }
+            BatchSize = 1; // No batching by default
+            OverflowAction = Wrappers.AsyncTargetWrapperOverflowAction.Grow; // No queue-limit by default
+            RetryCount = int.MaxValue; // Infinite retry by default
+            HttpErrorRetryTimeout = 500;
         }
 
         protected override void InitializeTarget()
         {
+            if (Url == null)
+            {
+                throw new NLogConfigurationException("URL is not configured.");
+            }
+
             base.InitializeTarget();
-            var token = _terminateProcessor.Token;
-            _ = Task.Run(() => Start(token), token);
-        }
-
-        private async Task Start(CancellationToken cancellationToken)
-        {
-            try
+            lock (_propertiesChanged)
             {
-                var stack = new List<byte[]>();
-                var lastQueueLengthLog = DateTime.UtcNow;
-                
-                while (!cancellationToken.IsCancellationRequested)
+                if (_httpClient == null)
                 {
-                    if (_taskQueue.IsEmpty)
-                    {
-                        await Task.Delay(50, cancellationToken).ConfigureAwait(false);
-                        continue;
-                    }
-
-                    if (lastQueueLengthLog < DateTime.UtcNow.AddMinutes(-1))
-                    {
-                        InternalLogger.Info($"HTTP Logger, queue length: {_taskQueue.Count}");
-                        lastQueueLengthLog = DateTime.UtcNow;
-                    }
-
-                    if (_hasHttpError)
-                        try
-                        {
-                            await _conversationActiveFlag.WaitAsync(_terminateProcessor.Token);
-                            await Task.Delay(HttpErrorRetryTimeout, cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (Exception exception)
-                        {
-                            InternalLogger.Info($"HTTP Logger: {exception.Message}");
-                        }
-                        finally
-                        {
-                            _hasHttpError = false;
-                            _conversationActiveFlag.Release();
-                        }
-
-                    stack.Clear();
-                    var builder = BuildChunk(stack, cancellationToken);
-                    await ProcessChunk(builder, stack).ConfigureAwait(false);
+                    NotifyPropertyChanged(nameof(Url));
+                    ResetHttpClientIfNeeded();
                 }
-            }
-            catch (Exception exception)
-            {
-                InternalLogger.Error(exception, "Error in HTTP Logger.");
-            }
-        }
-
-        private ArraySegment<byte> BuildChunk(List<byte[]> stack, CancellationToken flushToken)
-        {
-            _taskQueue.TryPeek(out var peek);
-
-            var peekedLength = peek?.Length ?? 100;
-
-            int memoryStreamSize = (int)(BatchSize * peekedLength * 1.1);
-            if (memoryStreamSize <= 0)
-            {
-                memoryStreamSize = (int)(peekedLength * 1.1);
-            }
-
-            using (var memoryStream = new MemoryStream(memoryStreamSize))
-            {
-                var counter = 0;
-                if (BatchAsJsonArray)
-                    memoryStream.Append(JsonArrayStart);
-
-                while (_taskQueue.TryDequeue(out var message))
-                {
-                    if (counter > 0)
-                        memoryStream.Append(BatchAsJsonArray ? JsonArrayDelimit : JsonNewline);
-
-                    ++counter;
-                    memoryStream.Append(InMemoryCompression ? Utility.UnzipAsBytes(message) : message);
-                    stack.Add(message);
-
-                    if (counter == BatchSize && !flushToken.IsCancellationRequested) break;
-                }
-
-                if (BatchAsJsonArray)
-                    memoryStream.Append(JsonArrayEnd);
-                return new ArraySegment<byte>(memoryStream.GetBuffer(), 0, (int)memoryStream.Length);
             }
         }
 
         protected override void CloseTarget()
         {
-            if (FlushBeforeShutdown)
-                AwaitCurrentMessagesToProcess().Wait();
-            _terminateProcessor.Cancel(false);
+            var oldHttpClient = _httpClient;
+            NotifyPropertyChanged(nameof(Url)); // Ensure to create fresh HttpClient
+            _httpClient = null;
+            oldHttpClient?.Dispose();
             base.CloseTarget();
         }
 
-        protected override void FlushAsync(AsyncContinuation asyncContinuation)
+        protected override Task WriteAsyncTask(LogEventInfo logEvent, CancellationToken cancellationToken)
         {
-            InternalLogger.Info($"Flushing {_taskQueue.Count} events");
-            AwaitCurrentMessagesToProcess().ContinueWith(task => asyncContinuation(task.Exception));
+            throw new NotSupportedException();  // Never called
         }
 
-        private async Task AwaitCurrentMessagesToProcess()
+        protected override Task WriteAsyncTask(IList<LogEventInfo> logEvents, CancellationToken cancellationToken)
         {
-            // If there are messages to be processed
-            // or no flags available 
-            // just wait
-            while (!_taskQueue.IsEmpty || _conversationActiveFlag.CurrentCount == 0)
-                await Task.Delay(50, CancellationToken.None).ConfigureAwait(false);
+            var chunk = BuildChunk(logEvents);
+            return SendFast(chunk);
         }
 
-        protected override void Write(LogEventInfo logEvent)
+        private RecyclableMemoryStream BuildChunk(IList<LogEventInfo> logEvents)
         {
-            var payload = RenderLogEvent(Layout, logEvent);
-            // NLogs Write is synchronous
-            SafeEnqueue(payload).Wait();
+            if (logEvents.Count == 0)
+            {
+                return MemoryStreamManager.GetStream("HTTP.BuildChunk.Empty");
+            }
+
+            var encoding = Utf8Encoding;
+            var firstPayloadString = RenderLogEvent(Layout, logEvents[0]);
+            var firstPayloadBytes = encoding.GetBytes(firstPayloadString);
+
+            var estimatedSize = (int)(logEvents.Count * firstPayloadBytes.Length * 1.1);
+            var ms = MemoryStreamManager.GetStream("HTTP.BuildChunk", estimatedSize);
+
+            if (BatchAsJsonArray)
+            {
+                ms.Append(JsonArrayStart);
+            }
+
+            ms.Append(firstPayloadBytes);
+
+            if (logEvents.Count > 1)
+            {
+                using (var sw = new StreamWriter(ms, encoding, bufferSize: 1024, leaveOpen: true))
+                {
+                    for (int i = 1; i < logEvents.Count; ++i)
+                    {
+                        sw.Write(BatchAsJsonArray ? ", " : Environment.NewLine);
+                        var payload = RenderLogEvent(Layout, logEvents[i]);
+                        sw.Write(payload);
+                    }
+                }
+            }
+
+            if (BatchAsJsonArray)
+            {
+                ms.Append(JsonArrayEnd);
+            }
+
+            ms.Position = 0;
+            return ms;
         }
 
-        private async Task SafeEnqueue(string payload)
+        protected override bool RetryFailedAsyncTask(Exception exception, CancellationToken cancellationToken, int retryCountRemaining, out TimeSpan retryDelay)
         {
-            while (_taskQueue.Count >= MaxQueueSize) await AwaitCurrentMessagesToProcess().ConfigureAwait(false);
+            // Special handling for 429 - longer delay
+            if (exception is TooManyRequestsException)
+            {
+                retryDelay = TimeSpan.FromMilliseconds(7500);
+                return retryCountRemaining > 0;
+            }
 
-            _taskQueue.Enqueue(InMemoryCompression
-                    ? Utility.Zip(payload)
-                    : Encoding.UTF8.GetBytes(payload));
+            // Normal retry delay for other errors
+            retryDelay = TimeSpan.FromMilliseconds(HttpErrorRetryTimeout);
+            return retryCountRemaining > 0;
         }
 
         /// <summary>
         ///     Sends all the messages
         /// </summary>
-        /// <param name="message"></param>
-        /// <returns>
-        ///     <value>true</value>
-        ///     if succeeded
-        /// </returns>
-        private async Task<bool> SendFast(ArraySegment<byte> message)
+        /// <param name="messageStream"></param>
+        private async Task SendFast(RecyclableMemoryStream? messageStream)
         {
-            await _conversationActiveFlag.WaitAsync(_terminateProcessor.Token).ConfigureAwait(false);
+            if (messageStream == null || messageStream.Length == 0)
+            {
+                messageStream?.Dispose();
+                return;
+            }
+
             try
             {
-                ResetHttpClientIfNeeded();
+                // Grab a local copy to avoid race conditions with disposal
+                HttpClient? client;
+
+                lock (_propertiesChanged)
+                {
+                    ResetHttpClientIfNeeded();
+                    client = _httpClient;
+                }
+
+                if (client == null)
+                {
+                    throw new InvalidOperationException("HttpClient is not initialized.");
+                }
+
                 var method = GetHttpMethodsToUseOrDefault();
-                var request = new HttpRequestMessage(method, string.Empty)
+                using (var request = new HttpRequestMessage(method, string.Empty))
                 {
-                    Content = new ByteArrayContent(message.Array, message.Offset, message.Count)
-                };
-                request.Content.Headers.ContentType = _contentTypeHeader;
-                var httpResponseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                    request.Content = new StreamContent(messageStream);
+                    request.Content.Headers.ContentType = _contentTypeHeader;
+
+                    InternalLogger.Info("Starting Transmission");
+                    var httpResponseMessage = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                    InternalLogger.Info("Finished Transmission");
+
 #if NETFRAMEWORK || NETSTANDARD
-                if ((int)httpResponseMessage.StatusCode == 429)
+                    if ((int)httpResponseMessage.StatusCode == 429)
+                    {
 #else
-                if (httpResponseMessage.StatusCode == HttpStatusCode.TooManyRequests)
+            if (httpResponseMessage.StatusCode == HttpStatusCode.TooManyRequests) {
 #endif
-                {
-                    // Respect 429.
-                    InternalLogger.Warn("Too many requests. Pausing for a moment.");
-                    await Task.Delay(7500).ConfigureAwait(false);
+                        // Respect 429.
+                        throw new TooManyRequestsException();
+                    }
+                    
+                    httpResponseMessage.EnsureSuccessStatusCode(); // Throw if not a success code and trigger retry
                 }
-
-                _hasHttpError = !httpResponseMessage.IsSuccessStatusCode;
-                if (_hasHttpError)
-                {
-                    InternalLogger.Warn($"There was a HTTP error: {httpResponseMessage.StatusCode}");
-                }
-
-                return !_hasHttpError;
-            }
-            catch (WebException)
-            {
-                _hasHttpError = true;
-                return false;
-            }
-            catch (HttpRequestException)
-            {
-                _hasHttpError = true;
-                return false;
-            }
-            catch (TaskCanceledException taskCanceledException) when
-                (taskCanceledException.InnerException is TimeoutException)
-            {
-                _hasHttpError = true;
-                return false;
-            }
-            catch (TaskCanceledException taskCanceledException)
-            {
-                InternalLogger.Warn(taskCanceledException, "Unknown timeout exception occurred");
-                return false;
-            }
-            catch (Exception ex)
-            {
-                InternalLogger.Warn(ex, "Unknown exception occured");
-                return false;
             }
             finally
             {
-                _conversationActiveFlag.Release();
+                messageStream?.Dispose();
             }
         }
 
@@ -448,15 +403,25 @@ namespace NLog.Targets.Http
 
         private void NotifyPropertyChanged(string name)
         {
-            _propertiesChanged.Push(name);
+            lock (_propertiesChanged)
+            {
+                _propertiesChanged.Push(name);
+            }
         }
 
         private void ResetHttpClientIfNeeded()
         {
-            if (!_propertiesChanged.Any()) return;
+            if (_propertiesChanged.IsEmpty)
+            {
+                return;
+            }
+
             lock (_propertiesChanged)
             {
-                _httpClient?.Dispose();
+                var oldHttpClient = _httpClient;
+                _httpClient = null;
+                oldHttpClient?.Dispose();
+
                 // ReSharper disable once UseObjectOrCollectionInitializer
 #if NETCOREAPP
                 var handler = new SocketsHttpHandler() {
@@ -503,13 +468,19 @@ namespace NLog.Targets.Http
                     // UseProxy will not be set, if proxyUrl is null or whitespace (above, few lines)
                     // ReSharper disable once AssignNullToNotNullAttribute
                     handler.Proxy = new WebProxy(new Uri(proxyUrl))
-                        { UseDefaultCredentials = useDefaultCredentials };
+                    {
+                        UseDefaultCredentials = useDefaultCredentials
+                    };
+
                     if (!useDefaultCredentials)
                     {
                         var cred = proxyUser.Split('\\');
                         handler.Proxy.Credentials = cred.Length == 1
                             ? new NetworkCredential
-                                { UserName = proxyUser, Password = ProxyPassword?.Render(nullEvent) ?? string.Empty }
+                            {
+                                UserName = proxyUser,
+                                Password = ProxyPassword?.Render(nullEvent) ?? string.Empty
+                            }
                             : new NetworkCredential
                             {
                                 Domain = cred[0], UserName = cred[1],
@@ -520,7 +491,9 @@ namespace NLog.Targets.Http
 
                 var authorization = Authorization?.Render(nullEvent);
                 if (!string.IsNullOrWhiteSpace(authorization))
+                {
                     _httpClient.DefaultRequestHeaders.Authorization = GetAuthorizationHeader(authorization);
+                }
 
                 if (IgnoreSslErrors)
                 {

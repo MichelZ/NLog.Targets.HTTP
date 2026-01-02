@@ -1,0 +1,10 @@
+<Project>
+	<PropertyGroup>
+		<Nullable>enable</Nullable>
+		<SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+		<DebugType>embedded</DebugType>
+		<AnalysisMode>Recommended</AnalysisMode>
+		<EnableNETAnalyzers>true</EnableNETAnalyzers>
+		<LangVersion>8.0</LangVersion>
+	</PropertyGroup>
+</Project>

@@ -43,7 +43,6 @@ Listed below are available configuration parameters with their default values (w
         Expect100Continue='false'
         UseNagleAlgorithm='true'
         ConnectTimeout='30000' 
-        InMemoryCompression='true'
         ProxyUrl=''
         ProxyUser=''
         ProxyPassword=''
@@ -100,9 +99,6 @@ because it reduces the number of packets transmitted and lowers the overhead per
 
 #### ConnectTimeout
 How long should the client wait to connect (default is __30__ seconds).
-
-#### InMemoryCompression
-Reduces the amount of memory consumed at the expense of increased CPU usage. Significant performance improvement can be achieved by using default of `false`. 
 
 #### ProxyUrl
 Designates a proxy server to use. Must include protocol (http|https) and port. 

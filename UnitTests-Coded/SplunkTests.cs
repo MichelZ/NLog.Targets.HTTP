@@ -1,27 +1,26 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using NLog;
 using NLog.Config;
 using NLog.Layouts;
 using NLog.Targets.Http;
-using NUnit.Framework;
 
 namespace UnitTests_Coded
 {
-    [TestFixture]
+    [TestClass]
     public class SplunkTests
     {
-        [SetUp]
+        [TestInitialize]
         public void TestSetup()
         {
             var config = new LoggingConfiguration();
             var target = new HTTP
             {
                 Url = "https://localhost:8088/services/collector/event",
-                Authorization = "Splunk cd3f0725-5e56-440b-bafc-0ccb663537c1",
+                Authorization = "Splunk 366afc23-26d9-4f1f-8331-0321c3e87df5",
                 Name = "SplunkTarget",
-                InMemoryCompression = false,
                 BatchSize = 50000,
                 BatchAsJsonArray = false,
                 Layout = new JsonLayout
@@ -59,7 +58,7 @@ namespace UnitTests_Coded
             _logger = LogManager.GetCurrentClassLogger();
         }
 
-        [OneTimeTearDown]
+        [TestCleanup]
         public void TestShutdown()
         {
             LogManager.Flush(TimeSpan.FromMinutes(1));
@@ -68,14 +67,14 @@ namespace UnitTests_Coded
 
         private ILogger _logger;
 
-        [Test]
+        [TestMethod]
         public void LogTests()
         {
             _logger.Info($"{DateTime.Now} - Confirm visually ");
         }
 
-        [Test]
-        public void LogPerformanceTest()
+        [TestMethod]
+        public async Task LogPerformanceTest()
         {
             var sw = Stopwatch.StartNew();
             Parallel.For(0, 1000, i => { Parallel.For(0, 1000, j => { _logger.Info($"{i}:{j}"); }); });

@@ -3,7 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using NLog.Common;
 
-namespace NLog.Target.Http.ProfilerShell
+namespace NLog.Targets.Http.ProfilerShell
 {
     internal class Program
     {

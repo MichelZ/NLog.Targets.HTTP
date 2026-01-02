@@ -2,33 +2,31 @@
 // 
 // (C) Copyright Quaterne, LLC - 2019
 
+using Microsoft.VisualStudio.TestTools.UnitTesting;
 using NLog;
 using NLog.Targets.Http;
-using NUnit.Framework;
 
 // ReSharper disable NotAccessedField.Local
 
 namespace UnitTests_ConfigurationAndLayout
 {
-    [TestFixture]
+    [TestClass]
     public class ConfigurationUpdatesTests
     {
-        [OneTimeSetUp]
+        [TestInitialize]
         public void SetUp()
         {
             _logger = LogManager.GetCurrentClassLogger();
-            _testDirectory = TestContext.CurrentContext.TestDirectory;
         }
 
-        private string _testDirectory;
         private Logger _logger;
 
-        [Test]
+        [TestMethod]
         public void HeadersAreNotEmpty()
         {
-            Assert.That(LogManager.Configuration.AllTargets.Count > 0);
+            Assert.IsGreaterThan(0, LogManager.Configuration.AllTargets.Count);
             var splunkTarget = (HTTP)LogManager.Configuration.FindTargetByName("splunk");
-            Assert.That(splunkTarget.Headers.Count == 2);
+            Assert.AreEqual(2, splunkTarget.Headers.Count);
         }
     }
 }
