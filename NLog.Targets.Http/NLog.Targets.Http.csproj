@@ -102,7 +102,7 @@
 
   <!--common NuGet package refs -->
   <ItemGroup>
-    <PackageReference Include="NLog" Version="6.0.4" />
+    <PackageReference Include="NLog" Version="6.0.7" />
   </ItemGroup>
 
   <ItemGroup Condition="!$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net6.0'))">

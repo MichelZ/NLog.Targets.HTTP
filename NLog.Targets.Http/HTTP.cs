@@ -254,6 +254,7 @@ namespace NLog.Targets.Http
                     }
 
                     if (_hasHttpError)
+                    {
                         try
                         {
                             await _conversationActiveFlag.WaitAsync(_terminateProcessor.Token);
@@ -268,6 +269,7 @@ namespace NLog.Targets.Http
                             _hasHttpError = false;
                             _conversationActiveFlag.Release();
                         }
+                    }
 
                     stack.Clear();
                     var builder = BuildChunk(stack, cancellationToken);
@@ -375,7 +377,11 @@ namespace NLog.Targets.Http
                     Content = new ByteArrayContent(message.Array, message.Offset, message.Count)
                 };
                 request.Content.Headers.ContentType = _contentTypeHeader;
+                InternalLogger.Info("Sending");
+
                 var httpResponseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
+
+                InternalLogger.Info("Finished.");
 #if NETFRAMEWORK || NETSTANDARD
                 if ((int)httpResponseMessage.StatusCode == 429)
 #else
