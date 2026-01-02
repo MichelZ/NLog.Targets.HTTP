@@ -359,9 +359,9 @@ namespace NLog.Targets.Http
                     request.Content = new StreamContent(messageStream);
                     request.Content.Headers.ContentType = _contentTypeHeader;
 
-                    InternalLogger.Info("Starting Transmission");
+                    //InternalLogger.Info("Starting Transmission");
                     var httpResponseMessage = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
-                    InternalLogger.Info("Finished Transmission");
+                    //InternalLogger.Info("Finished Transmission");
 
 #if NETFRAMEWORK || NETSTANDARD
                     if ((int)httpResponseMessage.StatusCode == 429)
