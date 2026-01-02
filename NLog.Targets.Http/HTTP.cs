@@ -10,7 +10,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.IO;
-using NLog.Common;
 using NLog.Config;
 using NLog.Layouts;
 #if (NETSTANDARD || NETCOREAPP)
